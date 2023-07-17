@@ -1,0 +1,214 @@
+#!syntax:pythonic
+
+#===============================
+#
+# Preparation
+# -----------
+#
+#===============================
+
+var globalGame := setGameConfig(480, 320, js([], 'Phaser.CANVAS') )
+var game := globalGame.phaserGame
+
+js (game):
+	game.scale.scaleMode = Phaser.ScaleManager.SHOW_ALL
+	game.scale.pageAlignHorizontally = true
+	game.scale.pageAlignVertically = true
+	game.stage.backgroundColor = '#eee'
+	game.load.image('ball', 'img/customBall.png')
+	game.load.image('paddle', 'img/customPaddle.png')
+	game.load.image('gem', 'img/gem.png')
+	game.load.image('emptygem', 'img/box.png')
+	game.physics.startSystem(Phaser.Physics.ARCADE)
+	game.physics.arcade.checkCollision.down = false
+
+# preload
+awaitReadyForCreate(globalGame)
+js (game, globalGame):
+	globalGame.balls = game.add.group()
+
+#========
+# drawing
+#========
+
+def makeNewBox(p_x, p_y):
+	js (p_x, p_y, game):
+		const box = game.add.sprite(p_x, p_y, 'emptygem')
+		box.anchor.set(0.5)
+		game.physics.enable(box, Phaser.Physics.ARCADE)
+		box.body.immovable = true
+		return box
+
+def makeNewGem(p_x, p_y):
+	js (p_x, p_y, game):
+		const gem = game.add.sprite(p_x, p_y, 'gem')
+		gem.anchor.set(0.5)
+		game.physics.enable(gem, Phaser.Physics.ARCADE)
+		gem.body.immovable = true
+		return gem
+
+def makeNewBall(p_x, p_y):
+	js (p_x, p_y, game):
+		const ball = game.add.sprite(p_x, p_y, 'ball')
+		ball.anchor.set(0.5)
+		game.physics.enable(ball, Phaser.Physics.ARCADE)
+		ball.body.velocity.set(Math.random()*300-150, -100 - 100*Math.random() )
+		ball.body.collideWorldBounds = true
+		ball.body.bounce.set(1)
+		
+		ball.checkWorldBounds = true
+		return ball
+
+def makeNewPaddle(p_x, p_y):
+	js (p_x, p_y, game):
+		const paddle = game.add.sprite(p_x, p_y, 'paddle')
+		paddle.anchor.set(0.5, 1)
+		game.physics.enable(paddle, Phaser.Physics.ARCADE)
+		paddle.body.immovable = true
+		return paddle
+
+#=================
+# lives of objects
+#=================
+
+def birthOfGem(p_column, p_row):
+	
+	# birth
+	#======
+	var thisBox := makeNewBox( p_column*(50+10) + 60, p_row*(20+10) + 50 )
+	
+	# after birth
+	#============
+	
+	var normalLife
+	
+	# this block is labeled "@normalLife"
+	parallel: @normalLife
+		whileTrueAwaitUpdate_js(globalGame, thisBox, `
+			phaserGame.physics.arcade.overlap(globalGame.balls, thisObject, ()=>{sugBreak('normalLife')})
+		`)
+	
+	var overlapedLife
+	
+	# this block is labeled "@overlapedLife"
+	parallel: @overlapedLife
+		whileTrueAwaitUpdate_js(globalGame, thisBox, `
+			const overlap = phaserGame.physics.arcade.overlap(globalGame.balls, thisObject)
+			if (! overlap) sugBreak('overlapedLife')
+		`)
+	
+	# making the gem
+	#===============
+	var thisGem := makeNewGem(thisBox.world.x, thisBox.world.y)
+	js (thisBox, game):
+		thisBox.destroy()
+	
+	# The birth is finished, a life-long behavior is added
+	spawn supplTreatment:
+		whileTrueAwaitUpdate_js(globalGame, thisGem, `
+			phaserGame.physics.arcade.collide(globalGame.balls, thisObject)
+		`)
+
+def lifeOfBall():
+	
+	# birth
+	#======
+	
+	var thisBall := makeNewBall(game.world.width/2, game.world.height-25)
+	js (globalGame, thisBall):
+		globalGame.balls.add(thisBall)
+	
+	# after birth
+	#============
+	
+	var normalLife
+	
+	parallel: @normalLife
+		# each onOutOfBounds is translated 'break normalLife'
+		whileTrueAwaitPhaser_translate(thisBall, 'onOutOfBounds', 'normalLife')
+	
+	# death
+	#======
+	js (thisBall):
+		// Remove the ball
+		thisBall.destroy()
+
+def lifeOfPaddle():
+	
+	# birth
+	#======
+	var thisPaddle := makeNewPaddle(game.world.width/2, game.world.height-5)
+	
+	# after birth
+	#============
+	
+	parallel:
+		# mouse management
+		#-----------------
+		whileTrueAwaitUpdate_js(globalGame, thisPaddle, `
+			thisObject.x = phaserGame.input.x || phaserGame.world.width/2
+		`)
+		
+		# bouncing
+		#-----------------
+		whileTrueAwaitUpdate_js(globalGame, thisPaddle, `
+			phaserGame.physics.arcade.collide(globalGame.balls, thisObject)
+		`)
+
+#===============================
+#
+# Main program
+# ------------
+#
+#===============================
+
+# just a little optimization
+separateMicrostep()
+
+var supplTreatment
+
+# main treatment
+parallel supplBranchBy supplTreatment:
+	
+	#===================
+	# Lives of objects
+	#===================
+	
+	# Bricks
+	#--------
+	
+	# usually, you don't have to specify 'sequence' because it's the default but, here, you have to (because this is in a 'parallel' block)
+	sequence:
+		
+		# list of rows and columns
+		var column := parRange(0, 6)
+		var row := parRange(0, 2)
+
+		# 'parallel forEachValueOf myVar' makes one parallel branch for each value of myVar
+		# (a 'parallel' block is finished only when all its branches are finished)
+		parallel forEachValueOf column:
+			parallel forEachValueOf row:
+				sequence:
+					# 'birthOfGem' executes all the birth of the gemstone
+					birthOfGem(column, row)
+		
+		# When the births of all gems end, you win
+		waitSeconds(2)
+		js ():
+			alert("YOU WIN, CONGRATS!")
+			document.location.reload()
+	
+	# Ball(s)
+	#--------
+	
+	sequence:
+		while true:
+			# (a) new(s) ball(s) come(s) to life
+			parallel:
+				# comment/uncomment the following line if you want one/two ball(s) for each round
+				lifeOfBall()
+				lifeOfBall()
+	
+	# Paddle
+	#--------
+	lifeOfPaddle()
